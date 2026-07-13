@@ -1,0 +1,13 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+data/
+logs/
+*.sqlite3
+.DS_Store
+watchlist.txt
+open_positions.json
+trades.csv
+safety-check-log.json

@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta http-equiv="refresh" content="30" />
+  <title>tradey dashboard</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --panel: #1a222c;
+      --text: #e7ecf1;
+      --muted: #8b9aab;
+      --accent: #3d9cf0;
+      --good: #3ecf8e;
+      --warn: #f0b429;
+      --bad: #f07178;
+      --line: #2a3542;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+      background: radial-gradient(1200px 600px at 10% -10%, #1b2a3a 0%, var(--bg) 55%);
+      color: var(--text);
+      min-height: 100vh;
+    }
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      padding: 1.25rem 1.5rem;
+      border-bottom: 1px solid var(--line);
+    }
+    header h1 {
+      margin: 0;
+      font-size: 1.25rem;
+      letter-spacing: 0.04em;
+      font-weight: 600;
+    }
+    header .meta { color: var(--muted); font-size: 0.85rem; }
+    .badge {
+      display: inline-block;
+      padding: 0.15rem 0.55rem;
+      border-radius: 999px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      background: #243447;
+      color: var(--accent);
+      margin-left: 0.5rem;
+    }
+    .badge.live { color: var(--bad); background: #3a1f24; }
+    main { padding: 1.25rem 1.5rem 2rem; max-width: 1100px; margin: 0 auto; }
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 0.75rem;
+      margin-bottom: 1.25rem;
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 0.9rem 1rem;
+    }
+    .card .label { color: var(--muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.06em; }
+    .card .value { font-size: 1.4rem; margin-top: 0.35rem; font-variant-numeric: tabular-nums; }
+    section {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      overflow: hidden;
+    }
+    section h2 {
+      margin: 0;
+      padding: 0.85rem 1rem;
+      font-size: 0.95rem;
+      border-bottom: 1px solid var(--line);
+      color: var(--muted);
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+    th, td { padding: 0.65rem 0.9rem; text-align: left; border-bottom: 1px solid var(--line); }
+    th { color: var(--muted); font-weight: 500; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; }
+    tr:last-child td { border-bottom: none; }
+    .type-fill { color: var(--good); }
+    .type-error, .type-reject { color: var(--bad); }
+    .type-connected, .type-info { color: var(--accent); }
+    .empty { padding: 1.5rem; color: var(--muted); }
+    .pnl-strip { margin-top: 1.25rem; }
+    .pnl-note {
+      padding: 0.65rem 1rem;
+      font-size: 0.8rem;
+      color: var(--warn);
+      border-bottom: 1px solid var(--line);
+      background: #241e12;
+    }
+    .pnl-meta {
+      padding: 0.55rem 1rem;
+      font-size: 0.8rem;
+      color: var(--muted);
+      border-bottom: 1px solid var(--line);
+    }
+    .pnl-pos { color: var(--good); }
+    .pnl-neg { color: var(--bad); }
+    .pnl-src { color: var(--muted); font-size: 0.75rem; }
+    .bot-panel { margin-bottom: 1.25rem; }
+    .bot-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 0.75rem;
+      padding: 0.9rem 1rem;
+    }
+    .bot-grid .label { color: var(--muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.06em; }
+    .bot-grid .value { font-size: 1.15rem; margin-top: 0.3rem; font-variant-numeric: tabular-nums; }
+    .bot-note {
+      padding: 0.65rem 1rem;
+      font-size: 0.8rem;
+      color: var(--muted);
+      border-top: 1px solid var(--line);
+    }
+    .state-Running { color: var(--good); }
+    .state-Stopped { color: var(--muted); }
+    .state-Stale { color: var(--warn); }
+    footer { padding: 1rem 1.5rem 2rem; color: var(--muted); font-size: 0.75rem; max-width: 1100px; margin: 0 auto; }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>tradey
+        {% if paper %}
+        <span class="badge">PAPER</span>
+        {% else %}
+        <span class="badge live">LIVE</span>
+        {% endif %}
+      </h1>
+    </div>
+    <div class="meta">auto-refresh 30s · {{ generated_at }}</div>
+  </header>
+  <main>
+    <section class="bot-panel">
+      <h2>Bot status</h2>
+      <div class="bot-grid">
+        <div>
+          <div class="label">State</div>
+          <div class="value state-{{ bot_status.state }}">{{ bot_status.state }}</div>
+        </div>
+        <div>
+          <div class="label">Session phase</div>
+          <div class="value">{{ bot_status.phase or '—' }}</div>
+        </div>
+        <div>
+          <div class="label">Mode</div>
+          <div class="value">
+            {% if bot_status.dry_run is none %}—
+            {% elif bot_status.dry_run %}dry-run
+            {% else %}paper
+            {% endif %}
+          </div>
+        </div>
+        <div>
+          <div class="label">Last tick age</div>
+          <div class="value">
+            {% if bot_status.last_tick_age_seconds is not none %}
+              {{ '%.0f'|format(bot_status.last_tick_age_seconds) }}s
+            {% else %}
+              —
+            {% endif %}
+          </div>
+        </div>
+        <div>
+          <div class="label">Open managed</div>
+          <div class="value">
+            {% if bot_status.open_count is not none %}{{ bot_status.open_count }}{% else %}—{% endif %}
+          </div>
+        </div>
+        <div>
+          <div class="label">Watchlist</div>
+          <div class="value">
+            {% if bot_status.watchlist_count is not none %}{{ bot_status.watchlist_count }}{% else %}—{% endif %}
+          </div>
+        </div>
+      </div>
+      {% if bot_status.last_error %}
+      <div class="pnl-note">Last error: {{ bot_status.last_error }}</div>
+      {% endif %}
+      <div class="bot-note">
+        {{ bot_status.gateway_note }}
+        · API <code>/api/bot_status</code>
+        · start <code>./scripts/start_paper_day.sh</code>
+        · stop <code>./scripts/stop_paper_day.sh</code>
+      </div>
+    </section>
+
+    <div class="cards">
+      <div class="card"><div class="label">Fills today</div><div class="value">{{ summary.fill_count }}</div></div>
+      <div class="card"><div class="label">Buys</div><div class="value">{{ summary.buy_count }}</div></div>
+      <div class="card"><div class="label">Sells</div><div class="value">{{ summary.sell_count }}</div></div>
+      <div class="card"><div class="label">Buy notional</div><div class="value">${{ '%.2f'|format(summary.buy_notional) }}</div></div>
+      <div class="card"><div class="label">Sell notional</div><div class="value">${{ '%.2f'|format(summary.sell_notional) }}</div></div>
+    </div>
+
+    <section>
+      <h2>Recent events</h2>
+      {% if events %}
+      <table>
+        <thead>
+          <tr>
+            <th>Time (UTC)</th>
+            <th>Type</th>
+            <th>Symbol</th>
+            <th>Side</th>
+            <th>Qty</th>
+            <th>Price</th>
+            <th>Status</th>
+            <th>Message</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for e in events %}
+          <tr>
+            <td>{{ e.timestamp_utc[:19] if e.timestamp_utc else '' }}</td>
+            <td class="type-{{ e.event_type }}">{{ e.event_type }}</td>
+            <td>{{ e.symbol or '—' }}</td>
+            <td>{{ e.side or '—' }}</td>
+            <td>{{ e.qty if e.qty is not none else '—' }}</td>
+            <td>{% if e.price is not none %}{{ '%.2f'|format(e.price) }}{% else %}—{% endif %}</td>
+            <td>{{ e.status or '—' }}</td>
+            <td>{{ e.message or '' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <div class="empty">No events yet. Run a paper trade script or wait for the bot cycle.</div>
+      {% endif %}
+    </section>
+
+    <section class="pnl-strip">
+      <h2>Past {{ pnl_days.days }} days · daily P/L</h2>
+      <div class="pnl-meta">
+        Closed trades: {{ expectancy.n_closed }}
+        · expectancy_R:
+        {% if expectancy.expectancy_R is not none %}
+          {{ '%.3f'|format(expectancy.expectancy_R) }}
+        {% else %}
+          —
+        {% endif %}
+        · win_rate:
+        {% if expectancy.win_rate is not none %}
+          {{ '%.0f'|format(expectancy.win_rate * 100) }}%
+        {% else %}
+          —
+        {% endif %}
+        {% if expectancy.last_experiment_line %}
+          · experiment: {{ expectancy.last_experiment_line }}
+        {% endif %}
+        · API: <code>/api/pnl_days?days=10</code>
+      </div>
+      {% if pnl_days.note %}
+      <div class="pnl-note">{{ pnl_days.note }}</div>
+      {% endif %}
+      <table>
+        <thead>
+          <tr>
+            <th>Date (UTC)</th>
+            <th>Day P/L</th>
+            <th>Trades / fills</th>
+            <th>Expectancy R</th>
+            <th>Source</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in pnl_days.rows|reverse %}
+          <tr>
+            <td>{{ row.date }}</td>
+            <td>
+              {% if row.day_pnl_usd is not none %}
+                <span class="{% if row.day_pnl_usd >= 0 %}pnl-pos{% else %}pnl-neg{% endif %}">
+                  ${{ '%.2f'|format(row.day_pnl_usd) }}
+                </span>
+              {% else %}
+                —
+              {% endif %}
+            </td>
+            <td>{{ row.trade_count }}</td>
+            <td>
+              {% if row.expectancy_R is not none %}
+                {{ '%.3f'|format(row.expectancy_R) }}
+              {% else %}
+                —
+              {% endif %}
+            </td>
+            <td class="pnl-src">
+              {% if row.source == 'closed_trades' %}closed trades
+              {% elif row.source == 'ledger_crude' %}ledger crude
+              {% else %}empty
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </section>
+  </main>
+  <footer>Ledger: {{ db_path }}</footer>
+</body>
+</html>
