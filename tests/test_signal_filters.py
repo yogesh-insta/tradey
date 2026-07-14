@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -84,21 +86,21 @@ def test_evaluate_from_metrics_fail_d3():
 
 
 def test_load_rules_from_repo():
-    rules = load_rules()
+    rules = load_rules(Path(__file__).resolve().parents[1] / 'rules.json')
     assert rules.strategy_name == "Trend Join Long"
     assert rules.daily_filters.D3_min_gap_pct_from_prior_close == 3.0
 
 
 def test_session_weekend():
     saturday = datetime(2026, 7, 11, 12, 0, tzinfo=ET)
-    status = classify_session(saturday)
+    status = classify_session(saturday, tz=ET)
     assert status.code == "weekend"
     assert not status.allow_new_entries
 
 
 def test_session_ok_window():
     midday = datetime(2026, 7, 13, 11, 0, tzinfo=ET)  # Monday
-    status = classify_session(midday)
+    status = classify_session(midday, tz=ET)
     assert status.code == "ok"
     assert status.allow_new_entries
 
@@ -178,3 +180,48 @@ def test_prefilter_with_injected_bars(tmp_path):
     assert "AAPL" in text
     assert "MSFT" not in text.split("\n")[5:] or True  # header ok; body has AAPL only
     assert "AAPL" in [line.split()[0] for line in text.splitlines() if line and not line.startswith("#")]
+
+
+def test_daily_bars_failure_reason_surfaces_yahoo_http():
+    from services.signal_generator.filters import _daily_bars_failure_reason
+
+    assert (
+        _daily_bars_failure_reason(None, "yahoo HTTP 403 for BHP.AX")
+        == "daily bars unavailable: yahoo HTTP 403 for BHP.AX"
+    )
+    assert _daily_bars_failure_reason(None, None) == "daily bars unavailable: empty response"
+
+    import pandas as pd
+
+    short = pd.DataFrame({"Close": [1.0] * 50})
+    assert _daily_bars_failure_reason(short, None) == (
+        "insufficient daily history for SMA200 (50 bars)"
+    )
+    assert "last Yahoo error" in _daily_bars_failure_reason(
+        short, "yahoo rate-limited (HTTP 429) for KAR.AX after 4 retries"
+    )
+
+
+def test_evaluate_symbol_surfaces_yahoo_error(monkeypatch):
+    """Empty daily must not look like a genuine short SMA200 series."""
+    import pandas as pd
+
+    from services.signal_generator import filters as filters_mod
+
+    calls: list[tuple[str, str]] = []
+
+    def fake_download(yahoo_symbol, *, period="1y", interval="1d"):
+        calls.append((period, interval))
+        return pd.DataFrame()
+
+    monkeypatch.setattr(filters_mod, "download_symbol_history", fake_download)
+    monkeypatch.setattr(
+        filters_mod,
+        "get_last_yahoo_error",
+        lambda: "yahoo HTTP 403 for KAR.AX: Forbidden",
+    )
+
+    ev = filters_mod.evaluate_symbol("KAR")
+    assert not ev.passed
+    assert ev.reasons == ["daily bars unavailable: yahoo HTTP 403 for KAR.AX: Forbidden"]
+    assert calls == [("1y", "1d"), ("5d", "5m")]

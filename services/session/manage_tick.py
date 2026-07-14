@@ -21,7 +21,8 @@ from services.position_manager.policy import (
 )
 from services.position_manager.state import PositionStore
 from services.position_manager.swing import trail_stop_from_swing
-from services.signal_generator.bars import fetch_chart, ibkr_to_yahoo
+from services.market_profile import get_market_profile
+from services.signal_generator.bars import fetch_chart
 from services.signal_generator.rules import ExitRules, StrategyRules
 
 logger = logging.getLogger(__name__)
@@ -33,7 +34,8 @@ SwingFn = Callable[[str], Optional[float]]
 def yahoo_mark(symbol: str) -> Optional[float]:
     """Best-effort last close from Yahoo 5m bars (works without Gateway)."""
     try:
-        frame = fetch_chart(ibkr_to_yahoo(symbol), period="1d", interval="5m")
+        yahoo = get_market_profile().to_yahoo(symbol)
+        frame = fetch_chart(yahoo, period="1d", interval="5m")
         if frame is None or frame.empty or "Close" not in frame.columns:
             return None
         val = float(frame["Close"].iloc[-1])
@@ -45,7 +47,8 @@ def yahoo_mark(symbol: str) -> Optional[float]:
 
 def yahoo_swing_stop(symbol: str) -> Optional[float]:
     try:
-        frame = fetch_chart(ibkr_to_yahoo(symbol), period="5d", interval="5m")
+        yahoo = get_market_profile().to_yahoo(symbol)
+        frame = fetch_chart(yahoo, period="5d", interval="5m")
         if frame is None or frame.empty or "Low" not in frame.columns:
             return None
         lows = [float(x) for x in frame["Low"].dropna().tolist()]

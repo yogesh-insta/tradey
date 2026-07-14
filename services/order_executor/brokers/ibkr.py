@@ -27,6 +27,29 @@ from services.order_executor.paper_guard import assert_paper_safe
 logger = logging.getLogger(__name__)
 
 
+def _stock_contract(
+    symbol: str,
+    *,
+    currency: Optional[str] = None,
+    exchange: Optional[str] = None,
+) -> Stock:
+    """Build Stock from active market profile (US SMART/USD or ASX SMART/AUD)."""
+    try:
+        from services.market_profile import get_market_profile
+
+        profile = get_market_profile()
+        ccy = currency or profile.currency
+        exch = exchange or profile.ibkr_exchange
+        primary = profile.ibkr_primary_exchange
+    except Exception:  # noqa: BLE001
+        ccy = currency or "USD"
+        exch = exchange or "SMART"
+        primary = None
+    if primary:
+        return Stock(symbol, exch, ccy, primaryExchange=primary)
+    return Stock(symbol, exch, ccy)
+
+
 class IbkrAdapter(BrokerAdapter):
     name = "ibkr"
 
@@ -121,7 +144,11 @@ class IbkrAdapter(BrokerAdapter):
                 message="qty < 1",
             )
 
-        contract = Stock(intent.symbol, intent.venue or "SMART", intent.currency or "USD")
+        contract = _stock_contract(
+            intent.symbol,
+            currency=intent.currency,
+            exchange=intent.venue,
+        )
         self._ib.qualifyContracts(contract)
 
         px = intent.limit_price
@@ -203,7 +230,7 @@ class IbkrAdapter(BrokerAdapter):
             raise BrokerNotConnectedError("IBKR not connected")
         assert_paper_safe()
         intent_id = f"modify_stop:{symbol}:{uuid4()}"
-        contract = Stock(symbol, "SMART", "USD")
+        contract = _stock_contract(symbol)
         self._ib.qualifyContracts(contract)
 
         trade = self._find_trade(stop_order_id)
@@ -263,7 +290,7 @@ class IbkrAdapter(BrokerAdapter):
                 status="rejected",
                 message="qty < 1",
             )
-        contract = Stock(symbol, "SMART", "USD")
+        contract = _stock_contract(symbol)
         self._ib.qualifyContracts(contract)
         order = MarketOrder("SELL", int(qty))
         order.tif = "DAY"

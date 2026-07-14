@@ -9,25 +9,35 @@ from pathlib import Path
 from typing import Any, Optional
 
 ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_STATUS_PATH = ROOT / "data" / "run" / "status.json"
-DEFAULT_RUNNER_PID_PATH = ROOT / "data" / "run" / "runner.pid"
+DEFAULT_STATUS_PATH = ROOT / "data" / "us" / "run" / "status.json"
+DEFAULT_RUNNER_PID_PATH = ROOT / "data" / "us" / "run" / "runner.pid"
 DEFAULT_STALE_AFTER_SECONDS = 180  # ~3× default 60s tick
 
 
 def default_status_path() -> Path:
     raw = os.getenv("BOT_STATUS_PATH", "").strip()
-    if not raw:
+    if raw:
+        path = Path(raw)
+        return path if path.is_absolute() else ROOT / path
+    try:
+        from services.market_profile import get_market_profile
+
+        return get_market_profile().status_path
+    except Exception:  # noqa: BLE001
         return DEFAULT_STATUS_PATH
-    path = Path(raw)
-    return path if path.is_absolute() else ROOT / path
 
 
 def default_runner_pid_path() -> Path:
     raw = os.getenv("BOT_RUNNER_PID_PATH", "").strip()
-    if not raw:
+    if raw:
+        path = Path(raw)
+        return path if path.is_absolute() else ROOT / path
+    try:
+        from services.market_profile import get_market_profile
+
+        return get_market_profile().runner_pid_path
+    except Exception:  # noqa: BLE001
         return DEFAULT_RUNNER_PID_PATH
-    path = Path(raw)
-    return path if path.is_absolute() else ROOT / path
 
 
 def stale_after_seconds() -> int:
@@ -71,6 +81,9 @@ def parse_status(raw: Any) -> Optional[dict[str, Any]]:
         pid = int(pid) if pid is not None else None
     except (TypeError, ValueError):
         pid = None
+    market = raw.get("market", "us")
+    if not isinstance(market, str) or not market.strip():
+        market = "us"
     return {
         "phase": phase.strip(),
         "dry_run": dry_run,
@@ -79,6 +92,7 @@ def parse_status(raw: Any) -> Optional[dict[str, Any]]:
         "watchlist_count": max(0, watchlist_count),
         "last_error": last_error,
         "pid": pid,
+        "market": market.strip().lower(),
     }
 
 
@@ -103,12 +117,16 @@ def write_status(
     pid: Optional[int] = None,
     path: Optional[Path] = None,
     last_tick_utc: Optional[str] = None,
+    market: Optional[str] = None,
 ) -> Path:
     status_path = Path(path) if path else default_status_path()
     status_path.parent.mkdir(parents=True, exist_ok=True)
+    if market is None:
+        market = os.getenv("MARKET", "us").strip().lower() or "us"
     payload = {
         "phase": phase,
         "dry_run": bool(dry_run),
+        "market": market,
         "last_tick_utc": last_tick_utc
         or datetime.now(timezone.utc).isoformat(),
         "open_count": int(open_count),
@@ -210,7 +228,15 @@ def classify_bot_state(
 
 
 def watchlist_symbol_count(watchlist_path: Optional[Path] = None) -> int:
-    path = watchlist_path or (ROOT / "watchlist.txt")
+    if watchlist_path is not None:
+        path = watchlist_path
+    else:
+        try:
+            from services.market_profile import get_market_profile
+
+            path = get_market_profile().watchlist_path
+        except Exception:  # noqa: BLE001
+            path = ROOT / "data" / "us" / "watchlist.txt"
     if not path.is_file():
         return 0
     try:
@@ -243,6 +269,7 @@ def build_bot_status_report(
         "state": state,
         "phase": (status or {}).get("phase"),
         "dry_run": (status or {}).get("dry_run"),
+        "market": (status or {}).get("market") or os.getenv("MARKET", "us"),
         "last_tick_utc": (status or {}).get("last_tick_utc"),
         "last_tick_age_seconds": age,
         "open_count": (status or {}).get("open_count"),

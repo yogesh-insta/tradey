@@ -56,6 +56,29 @@ def test_needs_refresh_empty_today_is_fresh(tmp_path: Path):
     assert fres.reason == "empty_today"
 
 
+def test_needs_refresh_error_cooldown(tmp_path: Path):
+    """Yahoo failure stub cools down briefly, then becomes refreshable."""
+    from services.session.prefilter_tick import ERROR_COOLDOWN_HOURS
+
+    path = tmp_path / "watchlist.txt"
+    path.write_text(
+        "# ERROR: yahoo rate-limited (HTTP 429)\n# Survivors: 0\n",
+        encoding="utf-8",
+    )
+    now = datetime(2026, 7, 14, 10, 0, tzinfo=ET)
+    recent = (now - timedelta(minutes=5)).timestamp()
+    os.utime(path, (recent, recent))
+    fres = needs_watchlist_refresh(path, now=now, max_age_hours=12.0)
+    assert fres.needs_refresh is False
+    assert fres.reason == "empty_error_cooldown"
+
+    old = (now - timedelta(hours=ERROR_COOLDOWN_HOURS + 0.05)).timestamp()
+    os.utime(path, (old, old))
+    fres2 = needs_watchlist_refresh(path, now=now, max_age_hours=12.0)
+    assert fres2.needs_refresh is True
+    assert fres2.reason == "empty"
+
+
 def test_needs_refresh_not_today_et(tmp_path: Path):
     path = tmp_path / "watchlist.txt"
     _write_watchlist(path)
