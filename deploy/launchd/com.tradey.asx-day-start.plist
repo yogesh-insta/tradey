@@ -1,62 +1,67 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  LaunchAgent: stop US paper-day processes at 09:00 local Mac clock.
+  LaunchAgent: start ASX paper day at 09:30 local Mac clock (AEST/AEDT).
 
-  After US session / force-close. Hands off to ASX daytime start at 09:30.
+  Weekday mornings before Sydney RTH (~10:00). Default is dry-run.
+  Pair with com.tradey.asx-day-stop.plist (~16:30). Sequential with US overnight
+  agents (21:30 start / 09:00 stop) — do not overlap runners.
 
-  Install:
-    cp deploy/launchd/com.tradey.paper-day-stop.plist ~/Library/LaunchAgents/
-    launchctl load ~/Library/LaunchAgents/com.tradey.paper-day-stop.plist
+  Install (once):
+    cp deploy/launchd/com.tradey.asx-day-start.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.tradey.asx-day-start.plist
 
-  Does not flatten IBKR positions — use scripts/flatten_all.py if needed.
+  Unload:
+    launchctl unload ~/Library/LaunchAgents/com.tradey.asx-day-start.plist
+
+  IB Gateway login remains manual.
 -->
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>com.tradey.paper-day-stop</string>
+  <string>com.tradey.asx-day-start</string>
   <key>ProgramArguments</key>
   <array>
     <string>/bin/bash</string>
-    <string>__REPO_ROOT__/scripts/stop_paper_day.sh</string>
+    <string>__REPO_ROOT__/scripts/start_paper_day.sh</string>
     <string>--market</string>
-    <string>us</string>
+    <string>asx</string>
   </array>
   <key>WorkingDirectory</key>
   <string>__REPO_ROOT__</string>
   <key>StartCalendarInterval</key>
   <array>
-    <!-- Mon–Fri 09:00 local (after US session / force-close) -->
+    <!-- Mon–Fri 09:30 local -->
     <dict>
       <key>Weekday</key><integer>1</integer>
       <key>Hour</key><integer>9</integer>
-      <key>Minute</key><integer>0</integer>
+      <key>Minute</key><integer>30</integer>
     </dict>
     <dict>
       <key>Weekday</key><integer>2</integer>
       <key>Hour</key><integer>9</integer>
-      <key>Minute</key><integer>0</integer>
+      <key>Minute</key><integer>30</integer>
     </dict>
     <dict>
       <key>Weekday</key><integer>3</integer>
       <key>Hour</key><integer>9</integer>
-      <key>Minute</key><integer>0</integer>
+      <key>Minute</key><integer>30</integer>
     </dict>
     <dict>
       <key>Weekday</key><integer>4</integer>
       <key>Hour</key><integer>9</integer>
-      <key>Minute</key><integer>0</integer>
+      <key>Minute</key><integer>30</integer>
     </dict>
     <dict>
       <key>Weekday</key><integer>5</integer>
       <key>Hour</key><integer>9</integer>
-      <key>Minute</key><integer>0</integer>
+      <key>Minute</key><integer>30</integer>
     </dict>
   </array>
   <key>StandardOutPath</key>
-  <string>__REPO_ROOT__/logs/launchd-stop.out.log</string>
+  <string>__REPO_ROOT__/logs/launchd-asx-start.out.log</string>
   <key>StandardErrorPath</key>
-  <string>__REPO_ROOT__/logs/launchd-stop.err.log</string>
+  <string>__REPO_ROOT__/logs/launchd-asx-start.err.log</string>
   <key>RunAtLoad</key>
   <false/>
 </dict>
