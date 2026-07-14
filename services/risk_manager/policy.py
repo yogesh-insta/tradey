@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, time
-from typing import Optional
+from typing import Optional, Union
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -19,11 +19,12 @@ from services.signal_generator.rules import (
 )
 
 ET = ZoneInfo("America/New_York")
+TzLike = Union[ZoneInfo, str]
 
 
 @dataclass(frozen=True)
 class SessionStatus:
-    """Entry window classification in America/New_York."""
+    """Entry window classification in the active market timezone."""
 
     code: str  # weekend | too_early | closed | manage_only | force_close | ok
     allow_new_entries: bool
@@ -34,23 +35,55 @@ def parse_hhmm(value: str) -> time:
     return time(int(hour), int(minute))
 
 
+def _resolve_tz(tz: Optional[TzLike] = None) -> ZoneInfo:
+    if tz is None:
+        try:
+            from services.market_profile import get_market_profile
+
+            return get_market_profile().tz
+        except Exception:  # noqa: BLE001
+            return ET
+    if isinstance(tz, ZoneInfo):
+        return tz
+    return ZoneInfo(str(tz))
+
+
 def classify_session(
     now: Optional[datetime] = None,
     *,
     time_filter: Optional[TimeFilter] = None,
+    tz: Optional[TzLike] = None,
+    market_open_hhmm: Optional[str] = None,
+    market_close_hhmm: Optional[str] = None,
 ) -> SessionStatus:
-    """Map current ET clock to blog cycle time gates."""
+    """Map local market clock to session phase codes (US ET or Sydney).
+
+    `time_filter` HH:MM fields are local to `tz` (names keep `_et` suffix for
+    schema continuity — ASX rules store Sydney times in the same keys).
+    """
     tf = time_filter or load_rules().time_filter
-    now_et = now.astimezone(ET) if now else datetime.now(ET)
-    if now_et.weekday() >= 5:
+    zone = _resolve_tz(tz)
+    if market_open_hhmm is None or market_close_hhmm is None:
+        try:
+            from services.market_profile import get_market_profile
+
+            profile = get_market_profile()
+            market_open_hhmm = market_open_hhmm or profile.market_open_hhmm
+            market_close_hhmm = market_close_hhmm or profile.market_close_hhmm
+        except Exception:  # noqa: BLE001
+            market_open_hhmm = market_open_hhmm or "10:00"
+            market_close_hhmm = market_close_hhmm or "16:00"
+
+    now_local = now.astimezone(zone) if now else datetime.now(zone)
+    if now_local.weekday() >= 5:
         return SessionStatus("weekend", False)
 
-    t = now_et.time()
+    t = now_local.time()
     earliest = parse_hhmm(tf.earliest_entry_et)
     latest = parse_hhmm(tf.latest_entry_et)
     force_close = parse_hhmm(tf.force_close_et)
-    market_open = time(10, 0)
-    market_close = time(16, 0)
+    market_open = parse_hhmm(market_open_hhmm)
+    market_close = parse_hhmm(market_close_hhmm)
 
     if t < market_open:
         return SessionStatus("too_early", False)
@@ -115,6 +148,7 @@ def evaluate_signal(
     """Apply time gate, daily-loss kill, concurrency, long-only, and size."""
     rules = rules or load_rules()
     session = classify_session(now, time_filter=rules.time_filter)
+    # Session TZ / open-close come from active MarketProfile inside classify_session.
     if not session.allow_new_entries:
         return RiskRejection(
             signal_id=signal.signal_id,

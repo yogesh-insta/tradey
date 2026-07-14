@@ -10,8 +10,21 @@ from typing import Any, Optional
 import pandas as pd
 
 from packages.contracts.signals import FilterEvaluation, NormalizedSignal
-from services.signal_generator.bars import download_symbol_history, ibkr_to_yahoo
+from services.market_profile import get_market_profile
+from services.signal_generator.bars import download_symbol_history, get_last_yahoo_error
 from services.signal_generator.rules import StrategyRules, load_rules
+
+
+def _daily_bars_failure_reason(daily: Optional[pd.DataFrame], yahoo_err: Optional[str]) -> str:
+    """Explain missing / short daily history; prefer real Yahoo errors over SMA200."""
+    n = 0 if daily is None else len(daily)
+    if n == 0:
+        if yahoo_err:
+            return f"daily bars unavailable: {yahoo_err}"
+        return "daily bars unavailable: empty response"
+    if yahoo_err:
+        return f"insufficient daily history for SMA200 ({n} bars); last Yahoo error: {yahoo_err}"
+    return f"insufficient daily history for SMA200 ({n} bars)"
 
 
 def check_d1_above_prior_day_high(price: float, prior_day_high: float) -> bool:
@@ -152,11 +165,11 @@ def evaluate_from_metrics(
     reasons.append("I3 ok")
 
     filters_fired = {
-        "D1": True,
-        "D2": True,
+        "D1": bool(daily.D1_above_prior_day_high),
+        "D2": bool(daily.D2_prior_close_above_sma200),
         "D3": True,
-        "I1": True,
-        "I2": True,
+        "I1": bool(intra.I1_above_premarket_high),
+        "I2": bool(intra.I2_above_today_hod),
         "I3": True,
     }
     metrics["filters_fired"] = filters_fired
@@ -177,10 +190,13 @@ def evaluate_symbol(
 ) -> FilterEvaluation:
     """Fetch Yahoo bars and evaluate filters for one IBKR-format symbol."""
     rules = rules or load_rules()
-    yahoo = ibkr_to_yahoo(symbol)
+    profile = get_market_profile()
+    yahoo = profile.to_yahoo(symbol)
 
     try:
         daily = download_symbol_history(yahoo, period="1y", interval="1d")
+        # Capture before intraday fetch — fetch_chart clears _last_yahoo_error on entry.
+        daily_err = get_last_yahoo_error()
         intraday = download_symbol_history(yahoo, period="5d", interval="5m")
     except Exception as exc:  # noqa: BLE001
         return FilterEvaluation(
@@ -193,7 +209,7 @@ def evaluate_symbol(
         return FilterEvaluation(
             symbol=symbol,
             passed=False,
-            reasons=["insufficient daily history for SMA200"],
+            reasons=[_daily_bars_failure_reason(daily, daily_err)],
         )
 
     prior = daily.iloc[-2]
@@ -251,18 +267,20 @@ def evaluation_to_signal(
     if not evaluation.passed:
         return None
     rules = rules or load_rules()
+    profile = get_market_profile()
     return NormalizedSignal(
         source="custom_model",
         strategy_name=rules.strategy_name,
         symbol=evaluation.symbol,
-        venue="SMART",
-        currency="USD",
+        venue=profile.ibkr_exchange,
+        currency=profile.currency,
         action="BUY",
         timeframe=rules.trade_timeframe,
         price=evaluation.price,
         reasons=list(evaluation.reasons),
         metadata={
             "filters": "D1-D3,I1-I3",
+            "market": profile.market,
             "filters_fired": (evaluation.metrics or {}).get("filters_fired")
             or {"D1": True, "D2": True, "D3": True, "I1": True, "I2": True, "I3": True},
             "metrics": evaluation.metrics,

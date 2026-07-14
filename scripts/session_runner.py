@@ -1,20 +1,17 @@
 #!/usr/bin/env python3
 """
-US-session day-cycle runner (plan 07).
+Day-cycle runner (plan 07 + 09 dual-mode).
+
+MARKET=us|asx (default us). Same Signal / Risk / Executor / PM stack;
+profile selects TZ, rules, universe, Yahoo map, IBKR contract defaults,
+and isolated data/{us,asx}/ paths.
 
 Default is --dry-run (no IBKR orders). Gateway not required for off-hours
 early-exit or dry-run decision ticks (Yahoo marks for manage when open).
 
-Auto-runs S&P gap prefilter → watchlist.txt (top 20) when missing/stale
-during too_early / manage_only / ok. Prefetch is Yahoo-only (never orders);
-runner --dry-run still writes the watchlist. Use --skip-prefilter to disable.
-
   python scripts/session_runner.py --once --dry-run
-  python scripts/session_runner.py --dry-run --interval 60
-  # paper manage + entries when ready:
-  # python scripts/session_runner.py --no-dry-run --interval 60
-
-Keep Mac awake for overnight soak (caffeinate / Energy Saver).
+  python scripts/session_runner.py --market asx --once --dry-run
+  MARKET=asx python scripts/session_runner.py --dry-run --interval 60
 """
 
 from __future__ import annotations
@@ -41,6 +38,7 @@ from packages.observability.bot_status import (
     watchlist_symbol_count,
     write_status,
 )
+from services.market_profile import MarketProfile, activate_market
 from services.order_executor.execution_service import ExecutionService
 from services.order_executor.paper_guard import check_paper_guard
 from services.position_manager.state import PositionStore
@@ -52,12 +50,18 @@ from services.session.prefilter_tick import run_prefilter_tick, stale_hours_from
 from services.signal_generator.rules import load_rules, rules_version_stamp
 
 
-def _heartbeat(summary: dict[str, Any], *, dry_run: bool, watchlist_path: Optional[Path] = None) -> None:
-    """Write data/run/status.json so the dashboard can show Running/Stale even after exit."""
+def _heartbeat(
+    summary: dict[str, Any],
+    *,
+    dry_run: bool,
+    profile: MarketProfile,
+    watchlist_path: Optional[Path] = None,
+) -> None:
+    """Write per-market status.json so the dashboard can show Running/Stale."""
     open_managed = summary.get("open_managed")
     if open_managed is None:
         try:
-            open_count = len(PositionStore().load())
+            open_count = len(PositionStore(profile.open_positions_path).load())
         except Exception:  # noqa: BLE001
             open_count = 0
     else:
@@ -65,13 +69,20 @@ def _heartbeat(summary: dict[str, Any], *, dry_run: bool, watchlist_path: Option
     phase = str(summary.get("session") or "unknown")
     err = summary.get("error")
     last_error = str(err)[:400] if err else None
+    if last_error is None:
+        pf = summary.get("prefilter") or {}
+        if pf.get("ran") and pf.get("success") is False and pf.get("error"):
+            last_error = f"prefilter: {pf['error']}"[:400]
+    wl = watchlist_path or profile.watchlist_path
     try:
         write_status(
             phase=phase,
             dry_run=dry_run,
             open_count=open_count,
-            watchlist_count=watchlist_symbol_count(watchlist_path),
+            watchlist_count=watchlist_symbol_count(wl),
             last_error=last_error,
+            path=profile.status_path,
+            market=profile.market,
         )
     except OSError as exc:
         print(f"status heartbeat write failed: {exc}", file=sys.stderr)
@@ -80,6 +91,7 @@ def _heartbeat(summary: dict[str, Any], *, dry_run: bool, watchlist_path: Option
 def run_once(
     *,
     dry_run: bool,
+    profile: MarketProfile,
     symbols: Optional[list[str]] = None,
     open_positions: int = 0,
     day_pnl: float = 0.0,
@@ -88,25 +100,32 @@ def run_once(
     watchlist_path: Optional[Path] = None,
 ) -> dict[str, Any]:
     t0 = time.perf_counter()
-    rules = load_rules()
+    rules = load_rules(profile.rules_path)
     capital = CapitalConfig.from_env()
-    session = classify_session(time_filter=rules.time_filter)
+    session = classify_session(
+        time_filter=rules.time_filter,
+        tz=profile.tz,
+        market_open_hhmm=profile.market_open_hhmm,
+        market_close_hhmm=profile.market_close_hhmm,
+    )
     ledger = Ledger()
-    store = PositionStore()
+    store = PositionStore(profile.open_positions_path)
+    wl_path = watchlist_path or profile.watchlist_path
 
     summary: dict[str, Any] = {
+        "market": profile.market,
         "session": session.code,
         "allow_new_entries": session.allow_new_entries,
         "dry_run": dry_run,
         "rules_version": rules_version_stamp(rules),
         "portfolio_value_aud": capital.portfolio_value_aud,
+        "currency": profile.currency,
         "prefilter": None,
         "manage_actions": [],
         "entries": None,
         "early_exit": False,
     }
 
-    # Weekend / post-close: cheap tick (no prefilter, no Yahoo scan / IB mutate)
     if session.code in {"weekend", "closed"}:
         summary["early_exit"] = True
         summary["duration_ms"] = int((time.perf_counter() - t0) * 1000)
@@ -116,6 +135,7 @@ def run_once(
                 message="session_tick",
                 metadata={
                     "channel": "session_tick",
+                    "market": profile.market,
                     "session_code": session.code,
                     "duration_ms": summary["duration_ms"],
                     "early_exit": True,
@@ -126,12 +146,10 @@ def run_once(
         )
         return summary
 
-    # Before/during RTH: refresh watchlist if missing or stale (Yahoo only; no orders).
-    # Runner --dry-run still writes watchlist.txt — dry-run only means no IBKR orders.
     pf = run_prefilter_tick(
         session_code=session.code,
         skip=skip_prefilter,
-        watchlist_path=watchlist_path,
+        watchlist_path=wl_path,
         max_age_hours=stale_hours_from_env(),
         ledger=ledger,
     )
@@ -142,7 +160,6 @@ def run_once(
             flush=True,
         )
 
-    # too_early: after optional prefilter, still early-exit (no manage/entries)
     if session.code == "too_early":
         summary["early_exit"] = True
         summary["duration_ms"] = int((time.perf_counter() - t0) * 1000)
@@ -152,6 +169,7 @@ def run_once(
                 message="session_tick",
                 metadata={
                     "channel": "session_tick",
+                    "market": profile.market,
                     "session_code": session.code,
                     "duration_ms": summary["duration_ms"],
                     "early_exit": True,
@@ -186,14 +204,11 @@ def run_once(
             summary["error"] = str(exc)
             notify("Session error", str(exc)[:400], "high")
             return summary
-    # dry-run: no Gateway required (marks via Yahoo when managing)
 
     try:
-        # Manage / force-close when positions exist or in manage windows
         force = session.code == "force_close"
         has_open = bool(store.load()) or (snap is not None and snap.open_position_count > 0)
         if force or has_open or session.code in {"ok", "manage_only"}:
-            # During force_close always attempt flatten of managed state
             if force or has_open:
                 summary["manage_actions"] = run_manage_tick(
                     rules=rules,
@@ -206,7 +221,6 @@ def run_once(
                     recent_fill_order_ids=fill_ids,
                 )
 
-        # Entries only in ok (daily-loss still blocks inside Risk)
         if session.code == "ok" and not force:
             entry = run_entry_tick(
                 rules=rules,
@@ -221,6 +235,7 @@ def run_once(
                 day_pnl_arg=day_pnl,
                 portfolio_usd_cli=portfolio_value,
                 ledger=ledger,
+                watchlist_path=wl_path,
             )
             summary["entries"] = {
                 "evaluated": entry.evaluated,
@@ -245,6 +260,7 @@ def run_once(
             message="session_tick",
             metadata={
                 "channel": "session_tick",
+                "market": profile.market,
                 "session_code": session.code,
                 "duration_ms": summary["duration_ms"],
                 "entries_attempted": (
@@ -266,10 +282,16 @@ def run_once(
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "US session day-cycle runner. Auto-refreshes watchlist via gap "
-            "prefilter when missing/stale (Yahoo only; never places orders). "
-            "Default --dry-run skips IBKR orders but still writes watchlist.txt."
+            "Session day-cycle runner (MARKET=us|asx). Auto-refreshes watchlist "
+            "via gap prefilter when missing/stale. Default --dry-run skips IBKR "
+            "orders but still writes the market watchlist."
         )
+    )
+    parser.add_argument(
+        "--market",
+        choices=["us", "asx"],
+        default=None,
+        help="Market mode (default: MARKET env or us)",
     )
     parser.add_argument(
         "--dry-run",
@@ -277,37 +299,22 @@ def main() -> int:
         default=True,
         help="Default true: decisions only; no IBKR orders (prefilter still writes watchlist)",
     )
-    parser.add_argument(
-        "--once",
-        action="store_true",
-        help="Single tick then exit (CI / manual)",
-    )
-    parser.add_argument(
-        "--interval",
-        type=int,
-        default=60,
-        help="Seconds between ticks when looping (default 60)",
-    )
-    parser.add_argument(
-        "--skip-prefilter",
-        action="store_true",
-        help="Do not auto-run morning gap prefilter (debug)",
-    )
-    parser.add_argument(
-        "--watchlist",
-        type=Path,
-        default=None,
-        help="Watchlist path (default: ./watchlist.txt)",
-    )
+    parser.add_argument("--once", action="store_true", help="Single tick then exit")
+    parser.add_argument("--interval", type=int, default=60)
+    parser.add_argument("--skip-prefilter", action="store_true")
+    parser.add_argument("--watchlist", type=Path, default=None)
     parser.add_argument("--symbols", nargs="*", default=None)
     parser.add_argument("--open-positions", type=int, default=0)
     parser.add_argument("--day-pnl", type=float, default=0.0)
     parser.add_argument("--portfolio-value", type=float, default=None)
     args = parser.parse_args()
 
+    profile = activate_market(args.market)
+
     def _tick() -> int:
         summary = run_once(
             dry_run=args.dry_run,
+            profile=profile,
             symbols=args.symbols,
             open_positions=args.open_positions,
             day_pnl=args.day_pnl,
@@ -315,7 +322,12 @@ def main() -> int:
             skip_prefilter=args.skip_prefilter,
             watchlist_path=args.watchlist,
         )
-        _heartbeat(summary, dry_run=args.dry_run, watchlist_path=args.watchlist)
+        _heartbeat(
+            summary,
+            dry_run=args.dry_run,
+            profile=profile,
+            watchlist_path=args.watchlist,
+        )
         print(json.dumps(summary, indent=2, default=str))
         if summary.get("error"):
             return 1
@@ -328,17 +340,17 @@ def main() -> int:
         json.dumps(
             {
                 "mode": "loop",
+                "market": profile.market,
                 "interval": args.interval,
                 "dry_run": args.dry_run,
                 "skip_prefilter": args.skip_prefilter,
-                "hint": "Ctrl+C to stop; use caffeinate for overnight soak",
+                "watchlist": str(args.watchlist or profile.watchlist_path),
+                "hint": "Ctrl+C to stop; use caffeinate for soak",
             },
             indent=2,
         )
     )
     while True:
-        # Never let one bad tick kill the overnight loop (Yahoo blips, corrupt
-        # state, transient ledger I/O, etc.). Heartbeat last_error for dashboard.
         try:
             code = _tick()
         except Exception as exc:  # noqa: BLE001
@@ -348,8 +360,12 @@ def main() -> int:
                 write_status(
                     phase="tick_error",
                     dry_run=args.dry_run,
-                    watchlist_count=watchlist_symbol_count(args.watchlist),
+                    watchlist_count=watchlist_symbol_count(
+                        args.watchlist or profile.watchlist_path
+                    ),
                     last_error=err[:400],
+                    path=profile.status_path,
+                    market=profile.market,
                 )
             except OSError as write_exc:
                 print(f"status heartbeat write failed: {write_exc}", file=sys.stderr)
@@ -359,7 +375,6 @@ def main() -> int:
                 pass
             code = 1
         if code != 0 and not args.dry_run:
-            # Soft-continue on paper errors; loop already continues either way
             pass
         time.sleep(max(5, int(args.interval)))
 

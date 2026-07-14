@@ -13,7 +13,8 @@ from packages.ledger import Ledger
 from services.order_executor.execution_service import ExecutionService
 from services.position_manager.r_math import compute_R
 from services.position_manager.state import PositionStore
-from services.risk_manager.capital import CapitalConfig, sizing_portfolio_usd
+from services.market_profile import get_market_profile
+from services.risk_manager.capital import CapitalConfig, sizing_portfolio
 from services.risk_manager.policy import evaluate_signal
 from services.signal_generator.evaluate import scan_watchlist
 from services.signal_generator.rules import StrategyRules, rules_version_stamp
@@ -44,11 +45,16 @@ def resolve_portfolio_context(
     portfolio_usd_cli: Optional[float] = None,
     snap: Optional[PortfolioSnapshot] = None,
 ) -> tuple[float, int, float, dict[str, Any]]:
-    """Return (portfolio_usd, open_count, day_pnl_usd, meta) for Risk."""
+    """Return (portfolio_usd, open_count, day_pnl_usd, meta) for Risk.
+
+    For MARKET=asx, sizing units are AUD (A$10k ceiling, no FX).
+    """
+    currency = get_market_profile().currency
     if snap is not None:
-        portfolio_usd = sizing_portfolio_usd(
-            broker_net_liquidation_usd=snap.net_liquidation_usd,
+        portfolio_usd = sizing_portfolio(
+            broker_net_liquidation=snap.net_liquidation_usd,
             config=capital,
+            currency=currency,
         )
         return (
             portfolio_usd,
@@ -60,13 +66,23 @@ def resolve_portfolio_context(
                 "account_id": snap.account_id,
                 "cap_usd": capital.portfolio_value_usd_cap,
                 "cap_aud": capital.portfolio_value_aud,
+                "sizing_currency": currency,
             },
         )
 
     if portfolio_usd_cli is not None and portfolio_usd_cli > 0:
-        portfolio_usd = min(portfolio_usd_cli, capital.portfolio_value_usd_cap)
+        cap = (
+            capital.portfolio_value_aud
+            if currency.upper() == "AUD"
+            else capital.portfolio_value_usd_cap
+        )
+        portfolio_usd = min(portfolio_usd_cli, cap)
     else:
-        portfolio_usd = capital.portfolio_value_usd_cap
+        portfolio_usd = sizing_portfolio(
+            broker_net_liquidation=None,
+            config=capital,
+            currency=currency,
+        )
     return (
         portfolio_usd,
         open_positions_arg,
@@ -75,6 +91,7 @@ def resolve_portfolio_context(
             "source": "env_cli",
             "cap_usd": capital.portfolio_value_usd_cap,
             "cap_aud": capital.portfolio_value_aud,
+            "sizing_currency": currency,
         },
     )
 
@@ -136,6 +153,7 @@ def run_entry_tick(
     day_pnl_arg: float = 0.0,
     portfolio_usd_cli: Optional[float] = None,
     ledger: Optional[Ledger] = None,
+    watchlist_path=None,
 ) -> EntryTickResult:
     """Scan watchlist → Risk → optional execute; register managed positions on fill."""
     out = EntryTickResult()
@@ -157,7 +175,7 @@ def run_entry_tick(
     managed_symbols = {p.symbol for p in managed}
     effective_open = max(open_count, len(managed))
 
-    scan = scan_watchlist(symbols, rules=rules)
+    scan = scan_watchlist(symbols, rules=rules, watchlist_path=watchlist_path)
     out.evaluated = len(scan.evaluations)
     out.filter_passed = scan.passed_count
 

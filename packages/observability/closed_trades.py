@@ -12,7 +12,7 @@ from packages.contracts.position import ExitAction, ManagedPosition
 from packages.observability.expectancy import per_trade_r_net
 
 ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_PATH = ROOT / "data" / "closed_trades.jsonl"
+DEFAULT_PATH = ROOT / "data" / "us" / "closed_trades.jsonl"
 
 
 def closed_trades_path() -> Path:
@@ -20,7 +20,12 @@ def closed_trades_path() -> Path:
     if raw.strip():
         path = Path(raw.strip())
         return path if path.is_absolute() else ROOT / path
-    return DEFAULT_PATH
+    try:
+        from services.market_profile import get_market_profile
+
+        return get_market_profile().closed_trades_path
+    except Exception:  # noqa: BLE001
+        return DEFAULT_PATH
 
 
 def record_closed_trade(

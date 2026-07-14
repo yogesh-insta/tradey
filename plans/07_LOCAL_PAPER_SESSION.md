@@ -85,6 +85,8 @@ Blog Step 10 puts time gate, stop-out detection, manage, force-close, and entrie
 
 ## Session state machine
 
+**Operator clock map (ET + ≈AEST Jul, bot start/stop, prefilter/scan/orders/exits):** see [README — US session timeline](../README.md#us-session-timeline).
+
 Already implemented in `services/risk_manager/policy.py` — runner must call it every tick and branch. Times from `rules.json` `time_filter` (defaults below); hard day bounds match the blog (10:00 / 16:00 ET).
 
 | Code | ET window (defaults) | New entries | Manage | Force flatten |
