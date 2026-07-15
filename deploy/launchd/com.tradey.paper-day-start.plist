@@ -66,5 +66,8 @@
   <string>__REPO_ROOT__/logs/launchd-start.err.log</string>
   <key>RunAtLoad</key>
   <false/>
+  <!-- Keep nohup'd dashboard/runner/caffeinate alive after start script exits -->
+  <key>AbandonProcessGroup</key>
+  <true/>
 </dict>
 </plist>

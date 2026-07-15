@@ -11,6 +11,8 @@ Schedule uses the **Mac local clock** (AEST/AEDT). Dual-mode sequential window:
 
 ASX daytime → idle handoff → US overnight. One active runner at a time (US client id `18`, ASX `19`).
 
+Start plists set `AbandonProcessGroup` so launchd does not SIGTERM the nohup’d dashboard/runner when `start_paper_day.sh` exits.
+
 IB Gateway login is still manual (human) before enabling paper orders.
 
 ## One-time install
