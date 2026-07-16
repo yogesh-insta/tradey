@@ -28,6 +28,7 @@
     <string>__REPO_ROOT__/scripts/start_paper_day.sh</string>
     <string>--market</string>
     <string>us</string>
+    <string>--paper</string>
   </array>
   <key>WorkingDirectory</key>
   <string>__REPO_ROOT__</string>

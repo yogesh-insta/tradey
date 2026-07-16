@@ -110,6 +110,10 @@ def needs_watchlist_refresh(
     if mtime.date() < now_local.date():
         return WatchlistFreshness(True, "not_today_et")
 
+    # Rebuild lists written before open-gap prefilter (close-to-close bug).
+    if has_symbol and "Gap = (open" not in text and "open gap >=" not in text:
+        return WatchlistFreshness(True, "legacy_gap_format")
+
     if age_hours > max_age_hours:
         return WatchlistFreshness(True, f"stale_age_hours={age_hours:.1f}")
 
@@ -135,13 +139,6 @@ def run_prefilter_tick(
     if skip:
         return PrefilterTickResult(ran=False, skipped=True, skip_reason="skip_prefilter")
 
-    if session_code not in PREFILTER_SESSION_CODES:
-        return PrefilterTickResult(
-            ran=False,
-            skipped=True,
-            skip_reason=f"session={session_code}",
-        )
-
     profile = get_market_profile()
     path = Path(watchlist_path) if watchlist_path else default_watchlist_path()
     hours = DEFAULT_STALE_HOURS if max_age_hours is None else max_age_hours
@@ -149,9 +146,22 @@ def run_prefilter_tick(
     if not freshness.needs_refresh:
         return PrefilterTickResult(ran=False, skipped=True, skip_reason="fresh", freshness=freshness)
 
+    if session_code not in PREFILTER_SESSION_CODES and freshness.reason != "legacy_gap_format":
+        return PrefilterTickResult(
+            ran=False,
+            skipped=True,
+            skip_reason=f"session={session_code}",
+            freshness=freshness,
+        )
+
     fetch = run_fn or run_prefilter
+    tick_now = now or datetime.now(profile.tz)
     # Always persist watchlist here: runner dry-run means no IBKR orders, not skip Yahoo write.
-    result: PrefilterResult = fetch(watchlist_path=path, dry_run=False)
+    result: PrefilterResult = fetch(
+        watchlist_path=path,
+        dry_run=False,
+        as_of=tick_now,
+    )
 
     if ledger is not None:
         ledger.append(
