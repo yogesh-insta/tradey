@@ -28,6 +28,7 @@
     <string>/Users/ym/mws26/tradey/scripts/start_paper_day.sh</string>
     <string>--market</string>
     <string>us</string>
+    <string>--paper</string>
   </array>
   <key>WorkingDirectory</key>
   <string>/Users/ym/mws26/tradey</string>

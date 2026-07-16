@@ -5,9 +5,9 @@ Schedule uses the **Mac local clock** (AEST/AEDT). Dual-mode sequential window:
 | When (local) | Agent | Action |
 |---|---|---|
 | **09:00** weekdays | `com.tradey.paper-day-stop` | `stop_paper_day.sh --market us` |
-| **09:30** weekdays | `com.tradey.asx-day-start` | `start_paper_day.sh --market asx` — dry-run default |
+| **09:30** weekdays | `com.tradey.asx-day-start` | `start_paper_day.sh --market asx --paper` |
 | **16:30** weekdays | `com.tradey.asx-day-stop` | `stop_paper_day.sh --market asx` |
-| **21:30** weekdays | `com.tradey.paper-day-start` | `start_paper_day.sh --market us` — dry-run; idles until US RTH |
+| **21:30** weekdays | `com.tradey.paper-day-start` | `start_paper_day.sh --market us --paper` |
 
 ASX daytime → idle handoff → US overnight. One active runner at a time (US client id `18`, ASX `19`).
 

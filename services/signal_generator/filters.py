@@ -5,6 +5,7 @@ Pure metric checks are unit-tested; bar assembly uses Yahoo chart API (no IBKR).
 
 from __future__ import annotations
 
+import datetime as dt_mod
 from typing import Any, Optional
 
 import pandas as pd
@@ -13,6 +14,10 @@ from packages.contracts.signals import FilterEvaluation, NormalizedSignal
 from services.market_profile import get_market_profile
 from services.signal_generator.bars import download_symbol_history, get_last_yahoo_error
 from services.signal_generator.rules import StrategyRules, load_rules
+
+# Keep stdlib anchors for isinstance / construction; tests may freeze `.datetime.now`.
+datetime = dt_mod.datetime
+date = dt_mod.date
 
 
 def _daily_bars_failure_reason(daily: Optional[pd.DataFrame], yahoo_err: Optional[str]) -> str:
@@ -188,10 +193,17 @@ def evaluate_symbol(
     *,
     rules: Optional[StrategyRules] = None,
 ) -> FilterEvaluation:
-    """Fetch Yahoo bars and evaluate filters for one IBKR-format symbol."""
+    """Fetch Yahoo bars and evaluate filters for one IBKR-format symbol.
+
+    D3 uses **opening gap** (today open vs prior close) — same definition as prefilter.
+    Price / HOD / LOD prefer today's 5m session bars when available (I2 needs live HOD join).
+    When the daily chart still lacks today's row, prior metrics come from the last daily
+    bar and today's open/HOD/price come from session 5m (ASX daily lag path).
+    """
     rules = rules or load_rules()
     profile = get_market_profile()
     yahoo = profile.to_yahoo(symbol)
+    session_date = datetime.now(profile.tz).date()
 
     try:
         daily = download_symbol_history(yahoo, period="1y", interval="1d")
@@ -205,24 +217,75 @@ def evaluate_symbol(
             reasons=[f"bar download failed: {exc}"],
         )
 
-    if daily is None or len(daily) < 201:
+    if daily is None or daily.empty:
         return FilterEvaluation(
             symbol=symbol,
             passed=False,
             reasons=[_daily_bars_failure_reason(daily, daily_err)],
         )
 
-    prior = daily.iloc[-2]
-    today = daily.iloc[-1]
-    prior_close = float(prior["Close"])
-    prior_day_high = float(prior["High"])
-    price = float(today["Close"])
-    today_hod = float(today["High"])
-    today_low = float(today["Low"])
-    today_vol = float(today["Volume"]) if "Volume" in today.index else 0.0
+    bar_date = _bar_date(daily.index[-1], profile.tz)
+    session_5m = _session_intraday(intraday, profile.tz, session_date)
+    has_session_5m = session_5m is not None and not session_5m.empty
 
-    close_series = daily["Close"].astype(float)
-    sma200_val = sma(close_series.iloc[:-1], 200)
+    if bar_date == session_date:
+        if len(daily) < 201:
+            return FilterEvaluation(
+                symbol=symbol,
+                passed=False,
+                reasons=[_daily_bars_failure_reason(daily, daily_err)],
+            )
+        prior = daily.iloc[-2]
+        today = daily.iloc[-1]
+        prior_close = float(prior["Close"])
+        prior_day_high = float(prior["High"])
+        today_open = float(today["Open"])
+        price = float(today["Close"])
+        today_hod = float(today["High"])
+        today_low = float(today["Low"])
+        today_vol = float(today["Volume"]) if "Volume" in today.index else 0.0
+        hist_closes = daily["Close"].astype(float).iloc[:-1]
+        hist_volumes = daily["Volume"].astype(float).iloc[:-1]
+        gap_basis = "open_vs_prior_close"
+    else:
+        # Daily lag: last row is prior session. Need 5m for today's open/price/HOD.
+        if len(daily) < 200:
+            return FilterEvaluation(
+                symbol=symbol,
+                passed=False,
+                reasons=[_daily_bars_failure_reason(daily, daily_err)],
+            )
+        if not has_session_5m:
+            return FilterEvaluation(
+                symbol=symbol,
+                passed=False,
+                reasons=[
+                    f"awaiting today's session open (last daily={bar_date.isoformat()}, "
+                    f"session={session_date.isoformat()})"
+                ],
+            )
+        prior = daily.iloc[-1]
+        prior_close = float(prior["Close"])
+        prior_day_high = float(prior["High"])
+        today_open = float(session_5m["Open"].iloc[0])
+        price = float(session_5m["Close"].iloc[-1])
+        today_hod = float(session_5m["High"].max())
+        today_low = float(session_5m["Low"].min())
+        today_vol = (
+            float(session_5m["Volume"].sum()) if "Volume" in session_5m.columns else 0.0
+        )
+        hist_closes = daily["Close"].astype(float)
+        hist_volumes = daily["Volume"].astype(float)
+        gap_basis = "open_vs_prior_close_5m"
+
+    if has_session_5m and bar_date == session_date:
+        price = float(session_5m["Close"].iloc[-1])
+        today_hod = float(session_5m["High"].max())
+        today_low = float(session_5m["Low"].min())
+        if "Volume" in session_5m.columns:
+            today_vol = float(session_5m["Volume"].sum())
+
+    sma200_val = sma(hist_closes, 200)
     if sma200_val is None:
         return FilterEvaluation(
             symbol=symbol,
@@ -232,15 +295,22 @@ def evaluate_symbol(
         )
 
     try:
-        gap = gap_pct(prior_close, price)
+        # Opening gap — aligned with morning prefilter (not last-price vs prior close).
+        gap = gap_pct(prior_close, today_open)
     except ValueError as exc:
         return FilterEvaluation(symbol=symbol, passed=False, reasons=[str(exc)])
 
-    # Premarket high proxy: max high on today's 5m bars before 09:30 ET when available.
-    premarket_high = _premarket_high(intraday, fallback=float(today["Open"]))
+    rth_open = _rth_open_hhmm(profile)
+    premarket_high = _premarket_high(
+        intraday,
+        fallback=today_open,
+        tz=profile.tz,
+        session_date=session_date,
+        open_hhmm=rth_open,
+    )
 
     vol_lookback = rules.intraday_filters.I3_rvol_lookback_days
-    avg_vol = float(daily["Volume"].astype(float).iloc[-(vol_lookback + 1) : -1].mean())
+    avg_vol = float(hist_volumes.tail(vol_lookback).mean()) if len(hist_volumes) else 0.0
     rvol = relative_volume(today_vol, avg_vol)
 
     result = evaluate_from_metrics(
@@ -256,6 +326,8 @@ def evaluate_symbol(
         rules=rules,
     )
     result.metrics["today_low"] = today_low
+    result.metrics["today_open"] = today_open
+    result.metrics["gap_basis"] = gap_basis
     return result
 
 
@@ -289,26 +361,81 @@ def evaluation_to_signal(
     )
 
 
-def _premarket_high(intraday: Optional[pd.DataFrame], *, fallback: float) -> float:
+def _rth_open_hhmm(profile) -> str:
+    """Wall-clock RTH open for premarket cutoff (US 09:30; ASX uses profile open)."""
+    if getattr(profile, "market", "") == "us":
+        return "09:30"
+    return getattr(profile, "market_open_hhmm", "10:00") or "10:00"
+
+
+def _bar_date(ts, zone) -> date:
+    """Calendar date of a bar timestamp in `zone` (robust to frozen datetime.now)."""
+    if hasattr(ts, "to_pydatetime"):
+        dt = ts.to_pydatetime()
+    else:
+        dt = ts
+    # datetime is a subclass of date — always normalize clock objects.
+    if isinstance(dt, dt_mod.datetime):
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=zone)
+        else:
+            dt = dt.astimezone(zone)
+        return dt.date()
+    if isinstance(dt, dt_mod.date):
+        return dt
+    raise TypeError(f"unsupported bar timestamp type: {type(ts)!r}")
+
+
+def _session_intraday(
+    intraday: Optional[pd.DataFrame],
+    zone,
+    session_date,
+) -> Optional[pd.DataFrame]:
+    if intraday is None or intraday.empty:
+        return None
+    try:
+        times = _index_times(intraday.index, zone)
+        mask = times.date == session_date if hasattr(times, "date") else [
+            t.date() == session_date for t in times
+        ]
+        out = intraday.loc[mask]
+        return out if not out.empty else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _index_times(idx, zone):
+    if getattr(idx, "tz", None) is None:
+        return idx.tz_localize(zone) if hasattr(idx, "tz_localize") else idx
+    return idx.tz_convert(zone)
+
+
+def _premarket_high(
+    intraday: Optional[pd.DataFrame],
+    *,
+    fallback: float,
+    tz=None,
+    session_date=None,
+    open_hhmm: str = "09:30",
+) -> float:
+    """Max high on today's bars before RTH open (profile TZ)."""
     if intraday is None or intraday.empty or "High" not in intraday.columns:
         return fallback
     try:
-        idx = intraday.index
-        if getattr(idx, "tz", None) is None:
-            # Assume US/Eastern naive timestamps from yfinance
-            from zoneinfo import ZoneInfo
+        from zoneinfo import ZoneInfo
 
-            et = ZoneInfo("America/New_York")
-            times = idx.tz_localize(et) if hasattr(idx, "tz_localize") else idx
-        else:
-            from zoneinfo import ZoneInfo
-
-            times = idx.tz_convert(ZoneInfo("America/New_York"))
-        mask = (times.hour < 9) | ((times.hour == 9) & (times.minute < 30))
-        # Only today's session
-        today = times[-1].date()
-        mask = mask & (times.date == today) if hasattr(times, "date") else mask
-        pm = intraday.loc[mask]
+        zone = tz or ZoneInfo("America/New_York")
+        open_h, open_m = (int(x) for x in open_hhmm.split(":")[:2])
+        times = _index_times(intraday.index, zone)
+        if session_date is None:
+            session_date = times[-1].date()
+        before_open = (times.hour < open_h) | (
+            (times.hour == open_h) & (times.minute < open_m)
+        )
+        on_day = times.date == session_date if hasattr(times, "date") else [
+            t.date() == session_date for t in times
+        ]
+        pm = intraday.loc[before_open & on_day]
         if pm.empty:
             return fallback
         return float(pm["High"].max())

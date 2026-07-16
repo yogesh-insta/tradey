@@ -154,8 +154,12 @@ def run_entry_tick(
     portfolio_usd_cli: Optional[float] = None,
     ledger: Optional[Ledger] = None,
     watchlist_path=None,
+    now=None,
 ) -> EntryTickResult:
-    """Scan watchlist → Risk → optional execute; register managed positions on fill."""
+    """Scan watchlist → Risk → optional execute; register managed positions on fill.
+
+    `now` is optional (injected for tests); Risk session gate uses market local clock.
+    """
     out = EntryTickResult()
     portfolio_usd, open_count, day_pnl_usd, capital_meta = resolve_portfolio_context(
         capital=capital,
@@ -199,6 +203,7 @@ def run_entry_tick(
             low_of_day=float(lod) if lod is not None else None,
             day_pnl_usd=day_pnl_usd,
             rules=rules,
+            now=now,
         )
         if isinstance(decision, RiskRejection):
             rej = decision.model_dump(mode="json")

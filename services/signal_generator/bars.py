@@ -6,7 +6,9 @@ Phase A default for screening/filters. Includes retry/backoff for Yahoo 429s.
 from __future__ import annotations
 
 import time
+from datetime import date
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 import httpx
 import pandas as pd
@@ -235,6 +237,89 @@ def download_symbol_history(
     interval: str = "1d",
 ) -> pd.DataFrame:
     return fetch_chart(yahoo_symbol, period=period, interval=interval)
+
+
+def _bar_local_date(ts, zone: ZoneInfo) -> date:
+    if hasattr(ts, "to_pydatetime"):
+        dt = ts.to_pydatetime()
+    else:
+        dt = ts
+    if getattr(dt, "tzinfo", None) is None:
+        dt = dt.replace(tzinfo=zone)
+    else:
+        dt = dt.astimezone(zone)
+    return dt.date()
+
+
+def session_open_from_intraday(
+    frame: pd.DataFrame,
+    *,
+    session_date: date,
+    tz: ZoneInfo,
+) -> Optional[tuple[float, float]]:
+    """First session 5m open + last session close, or None if no bars that day."""
+    if frame is None or frame.empty or "Open" not in frame.columns:
+        return None
+    opens: list[float] = []
+    closes: list[float] = []
+    for ts, row in frame.iterrows():
+        if _bar_local_date(ts, tz) != session_date:
+            continue
+        try:
+            o = float(row["Open"])
+            c = float(row["Close"]) if "Close" in row and row["Close"] == row["Close"] else o
+        except (TypeError, ValueError):
+            continue
+        if o != o:  # NaN
+            continue
+        opens.append(o)
+        closes.append(c if c == c else o)
+    if not opens:
+        return None
+    return opens[0], closes[-1]
+
+
+def download_session_opens(
+    yahoo_tickers: list[str],
+    *,
+    session_date: date,
+    tz: ZoneInfo,
+    period: str = "1d",
+    pause_s: float = 0.12,
+    max_consecutive_failures: int = 20,
+) -> dict[str, tuple[float, float]]:
+    """Yahoo 5m → {symbol: (session_open, last_session_close)} for session_date.
+
+    Used when the daily chart still lacks today's bar (common for ASX early session).
+    """
+    _set_last_yahoo_error(None)
+    out: dict[str, tuple[float, float]] = {}
+    if not yahoo_tickers:
+        return out
+
+    consecutive_fail = 0
+    with httpx.Client(timeout=20.0, headers=_HEADERS, follow_redirects=True) as client:
+        for i, sym in enumerate(yahoo_tickers):
+            payload = _get_chart_json(
+                client, sym, period=period, interval="5m", retries=2
+            )
+            if payload:
+                frame = _parse_chart_payload(payload)
+                pair = session_open_from_intraday(frame, session_date=session_date, tz=tz)
+                if pair is not None:
+                    out[sym] = pair
+                    consecutive_fail = 0
+                else:
+                    consecutive_fail += 1
+            else:
+                consecutive_fail += 1
+
+            if consecutive_fail >= max_consecutive_failures and not out:
+                break
+            if pause_s and i + 1 < len(yahoo_tickers):
+                time.sleep(pause_s)
+
+    return out
 
 
 def extract_ticker_frame(data: pd.DataFrame, yahoo_symbol: str) -> Optional[pd.DataFrame]:

@@ -20,9 +20,26 @@ ET = ZoneInfo("America/New_York")
 
 def _write_watchlist(path: Path, *, symbol: str = "AAPL") -> None:
     path.write_text(
-        f"# test watchlist\n{symbol}  # gap +5.00%\n",
+        "# test watchlist\n"
+        "# Market: us  Filters: open gap >= 3.0%, open >= $3.0\n"
+        "# Gap = (open - prior_close) / prior_close\n"
+        f"{symbol}  # gap +5.00%  open $100.00  prev $95.00\n",
         encoding="utf-8",
     )
+
+
+def test_needs_refresh_legacy_gap_format(tmp_path: Path):
+    path = tmp_path / "watchlist.txt"
+    path.write_text(
+        "# Market: us  Filters: gap >= 3.0%, price >= $3.0\n"
+        "AAPL  # gap +5.00%  open $100.00  prev $95.00\n",
+        encoding="utf-8",
+    )
+    now = datetime(2026, 7, 14, 10, 0, tzinfo=ET)
+    os.utime(path, (now.timestamp(), now.timestamp()))
+    fres = needs_watchlist_refresh(path, now=now)
+    assert fres.needs_refresh is True
+    assert fres.reason == "legacy_gap_format"
 
 
 def test_needs_refresh_missing(tmp_path: Path):
@@ -176,9 +193,13 @@ def test_run_prefilter_tick_runs_when_missing(tmp_path: Path):
     assert out.to_summary()["survivors_count"] == 7
 
 
-def test_run_prefilter_tick_skip_flag_and_session():
+def test_run_prefilter_tick_skip_flag_and_session(tmp_path: Path):
     skipped = run_prefilter_tick(session_code="ok", skip=True, notify_enabled=False)
     assert skipped.skipped and skipped.skip_reason == "skip_prefilter"
 
-    weekend = run_prefilter_tick(session_code="weekend", notify_enabled=False)
+    weekend = run_prefilter_tick(
+        session_code="weekend",
+        watchlist_path=tmp_path / "watchlist.txt",
+        notify_enabled=False,
+    )
     assert weekend.skipped and "session=" in (weekend.skip_reason or "")
