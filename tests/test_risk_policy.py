@@ -119,6 +119,6 @@ def test_size_long_with_10k_aud_cap_usd():
 def test_session_manage_only_rejects_entries():
     # After latest_entry (15:30) but before force_close (15:51)
     late = datetime(2026, 7, 13, 15, 40, tzinfo=ET)
-    status = classify_session(late)
+    status = classify_session(late, tz=ET)
     assert status.code == "manage_only"
     assert not status.allow_new_entries

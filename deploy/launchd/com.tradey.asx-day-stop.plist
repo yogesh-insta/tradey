@@ -1,62 +1,63 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  LaunchAgent: stop US paper-day processes at 09:00 local Mac clock.
+  LaunchAgent: stop ASX paper-day processes at 16:30 local Mac clock.
 
-  After US session / force-close. Hands off to ASX daytime start at 09:30.
+  After Sydney force-close (~15:51–16:00). Hands off idle window before US
+  overnight start at 21:30.
 
   Install:
-    cp deploy/launchd/com.tradey.paper-day-stop.plist ~/Library/LaunchAgents/
-    launchctl load ~/Library/LaunchAgents/com.tradey.paper-day-stop.plist
+    cp deploy/launchd/com.tradey.asx-day-stop.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.tradey.asx-day-stop.plist
 
   Does not flatten IBKR positions — use scripts/flatten_all.py if needed.
 -->
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>com.tradey.paper-day-stop</string>
+  <string>com.tradey.asx-day-stop</string>
   <key>ProgramArguments</key>
   <array>
     <string>/bin/bash</string>
     <string>/Users/ym/mws26/tradey/scripts/stop_paper_day.sh</string>
     <string>--market</string>
-    <string>us</string>
+    <string>asx</string>
   </array>
   <key>WorkingDirectory</key>
   <string>/Users/ym/mws26/tradey</string>
   <key>StartCalendarInterval</key>
   <array>
-    <!-- Mon–Fri 09:00 local (after US session / force-close) -->
+    <!-- Mon–Fri 16:30 local -->
     <dict>
       <key>Weekday</key><integer>1</integer>
-      <key>Hour</key><integer>9</integer>
-      <key>Minute</key><integer>0</integer>
+      <key>Hour</key><integer>16</integer>
+      <key>Minute</key><integer>30</integer>
     </dict>
     <dict>
       <key>Weekday</key><integer>2</integer>
-      <key>Hour</key><integer>9</integer>
-      <key>Minute</key><integer>0</integer>
+      <key>Hour</key><integer>16</integer>
+      <key>Minute</key><integer>30</integer>
     </dict>
     <dict>
       <key>Weekday</key><integer>3</integer>
-      <key>Hour</key><integer>9</integer>
-      <key>Minute</key><integer>0</integer>
+      <key>Hour</key><integer>16</integer>
+      <key>Minute</key><integer>30</integer>
     </dict>
     <dict>
       <key>Weekday</key><integer>4</integer>
-      <key>Hour</key><integer>9</integer>
-      <key>Minute</key><integer>0</integer>
+      <key>Hour</key><integer>16</integer>
+      <key>Minute</key><integer>30</integer>
     </dict>
     <dict>
       <key>Weekday</key><integer>5</integer>
-      <key>Hour</key><integer>9</integer>
-      <key>Minute</key><integer>0</integer>
+      <key>Hour</key><integer>16</integer>
+      <key>Minute</key><integer>30</integer>
     </dict>
   </array>
   <key>StandardOutPath</key>
-  <string>/Users/ym/mws26/tradey/logs/launchd-stop.out.log</string>
+  <string>/Users/ym/mws26/tradey/logs/launchd-asx-stop.out.log</string>
   <key>StandardErrorPath</key>
-  <string>/Users/ym/mws26/tradey/logs/launchd-stop.err.log</string>
+  <string>/Users/ym/mws26/tradey/logs/launchd-asx-stop.err.log</string>
   <key>RunAtLoad</key>
   <false/>
 </dict>

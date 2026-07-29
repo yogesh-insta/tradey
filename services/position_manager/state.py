@@ -10,7 +10,7 @@ from typing import Optional
 from packages.contracts.position import ManagedPosition
 
 ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_STATE_PATH = ROOT / "data" / "open_positions.json"
+DEFAULT_STATE_PATH = ROOT / "data" / "us" / "open_positions.json"
 
 
 def default_state_path() -> Path:
@@ -20,7 +20,12 @@ def default_state_path() -> Path:
         if not path.is_absolute():
             path = ROOT / path
         return path
-    return DEFAULT_STATE_PATH
+    try:
+        from services.market_profile import get_market_profile
+
+        return get_market_profile().open_positions_path
+    except Exception:  # noqa: BLE001
+        return DEFAULT_STATE_PATH
 
 
 class PositionStore:

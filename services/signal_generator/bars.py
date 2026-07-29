@@ -6,38 +6,72 @@ Phase A default for screening/filters. Includes retry/backoff for Yahoo 429s.
 from __future__ import annotations
 
 import time
+from datetime import date
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 import httpx
 import pandas as pd
 
 _CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+# Chrome-like UAs get Edge rate-limited hard; a short compatible UA is more reliable.
 _HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    )
+    "User-Agent": "Mozilla/5.0 (compatible; tradey/1.0)",
+    "Accept": "application/json",
 }
 
-
-def ibkr_to_yahoo(symbol: str) -> str:
-    """IBKR class-B space form → Yahoo hyphen form (BRK B → BRK-B)."""
-    return symbol.strip().replace(" ", "-")
+# Last download failure summary for callers (prefilter error strings).
+_last_yahoo_error: Optional[str] = None
 
 
-def yahoo_to_ibkr(symbol: str) -> str:
-    return symbol.strip().replace("-", " ")
+def get_last_yahoo_error() -> Optional[str]:
+    return _last_yahoo_error
+
+
+def _set_last_yahoo_error(msg: Optional[str]) -> None:
+    global _last_yahoo_error
+    _last_yahoo_error = msg
+
+
+def ibkr_to_yahoo(symbol: str, *, yahoo_suffix: str = "") -> str:
+    """IBKR symbol → Yahoo chart symbol.
+
+    US: class-B space → hyphen (BRK B → BRK-B).
+    ASX: append .AX (BHP → BHP.AX) when yahoo_suffix=".AX".
+    """
+    base = symbol.strip().replace(" ", "-")
+    if not yahoo_suffix:
+        return base
+    if base.upper().endswith(yahoo_suffix.upper()):
+        return base
+    return f"{base}{yahoo_suffix}"
+
+
+def yahoo_to_ibkr(symbol: str, *, yahoo_suffix: str = "") -> str:
+    """Yahoo chart symbol → IBKR (strip suffix, hyphen → space)."""
+    s = symbol.strip()
+    if yahoo_suffix and s.upper().endswith(yahoo_suffix.upper()):
+        s = s[: -len(yahoo_suffix)]
+    return s.replace("-", " ")
 
 
 def _parse_chart_payload(payload: dict) -> pd.DataFrame:
-    result = (payload.get("chart") or {}).get("result")
+    chart = payload.get("chart") or {}
+    err = chart.get("error")
+    result = chart.get("result")
+    if err:
+        desc = err.get("description") if isinstance(err, dict) else str(err)
+        _set_last_yahoo_error(f"yahoo chart error: {desc}")
+        return pd.DataFrame()
     if not result:
+        _set_last_yahoo_error("yahoo chart result was null/empty")
         return pd.DataFrame()
     block = result[0]
     timestamps = block.get("timestamp") or []
     quote = (block.get("indicators") or {}).get("quote") or [{}]
     q0 = quote[0] if quote else {}
     if not timestamps:
+        _set_last_yahoo_error("yahoo chart had no timestamps")
         return pd.DataFrame()
     frame = pd.DataFrame(
         {
@@ -52,30 +86,63 @@ def _parse_chart_payload(payload: dict) -> pd.DataFrame:
     return frame.dropna(subset=["Close"])
 
 
+# Transient Yahoo / Edge statuses worth retrying (403 flaps under load; 429 rate limit).
+_RETRYABLE_STATUS = frozenset({403, 429, 502, 503})
+
+
 def _get_chart_json(
     client: httpx.Client,
     yahoo_symbol: str,
     *,
     period: str,
     interval: str,
-    retries: int = 3,
+    retries: int = 4,
 ) -> Optional[dict]:
     url = _CHART_URL.format(symbol=yahoo_symbol)
-    delay = 0.35
+    delay = 0.5
+    last_status: Optional[int] = None
+    last_body = ""
     for attempt in range(retries):
         try:
             resp = client.get(url, params={"range": period, "interval": interval})
-            if resp.status_code == 429:
-                time.sleep(delay * (attempt + 1) * 2)
+            last_status = resp.status_code
+            last_body = (resp.text or "").strip()[:120]
+            if resp.status_code in _RETRYABLE_STATUS:
+                # Exponential backoff — Yahoo Edge cool-down can take tens of seconds.
+                time.sleep(min(20.0, delay * (2**attempt)))
                 continue
             if resp.status_code >= 400:
+                _set_last_yahoo_error(
+                    f"yahoo HTTP {resp.status_code} for {yahoo_symbol}"
+                    + (f": {last_body}" if last_body else "")
+                )
                 return None
             if not resp.content:
                 time.sleep(delay)
                 continue
+            # Non-JSON bodies (plain "Too Many Requests") — treat as soft fail.
+            ctype = (resp.headers.get("content-type") or "").lower()
+            if "json" not in ctype and not resp.content.lstrip().startswith(b"{"):
+                snippet = resp.text.strip()[:80]
+                _set_last_yahoo_error(
+                    f"yahoo non-JSON response for {yahoo_symbol}: {snippet or resp.status_code}"
+                )
+                time.sleep(delay * (attempt + 1))
+                continue
             return resp.json()
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            # httpx raises ProxyError/HTTPStatusError for some 403s; keep message clear.
+            _set_last_yahoo_error(f"yahoo request failed for {yahoo_symbol}: {exc}")
             time.sleep(delay * (attempt + 1))
+    if last_status == 429:
+        _set_last_yahoo_error(
+            f"yahoo rate-limited (HTTP 429) for {yahoo_symbol} after {retries} retries"
+        )
+    elif last_status is not None:
+        detail = f": {last_body}" if last_body else ""
+        _set_last_yahoo_error(
+            f"yahoo HTTP {last_status} for {yahoo_symbol} after {retries} retries{detail}"
+        )
     return None
 
 
@@ -87,6 +154,7 @@ def fetch_chart(
     timeout: float = 20.0,
 ) -> pd.DataFrame:
     """Return OHLCV DataFrame indexed by UTC timestamps. Empty on failure."""
+    _set_last_yahoo_error(None)
     with httpx.Client(timeout=timeout, headers=_HEADERS, follow_redirects=True) as client:
         payload = _get_chart_json(client, yahoo_symbol, period=period, interval=interval)
     if not payload:
@@ -99,7 +167,7 @@ def download_daily_bars(
     *,
     period: str = "5d",
     threads: int = 5,
-    pause_s: float = 0.12,
+    pause_s: float = 0.15,
     max_consecutive_failures: int = 15,
 ) -> pd.DataFrame:
     """Bulk daily bars as MultiIndex columns (ticker, field).
@@ -108,16 +176,23 @@ def download_daily_bars(
     `threads` kept for blog CLI compatibility but is not used for concurrency.
     """
     _ = threads
+    _set_last_yahoo_error(None)
     if not yahoo_tickers:
+        _set_last_yahoo_error("yahoo download called with empty ticker list")
         return pd.DataFrame()
 
     frames: dict[str, pd.DataFrame] = {}
     consecutive_fail = 0
+    status_429 = 0
+    other_fail = 0
+    attempted = 0
     with httpx.Client(timeout=20.0, headers=_HEADERS, follow_redirects=True) as client:
         for i, sym in enumerate(yahoo_tickers):
+            attempted += 1
             payload = _get_chart_json(
-                client, sym, period=period, interval="1d", retries=2
+                client, sym, period=period, interval="1d", retries=3
             )
+            after_err = get_last_yahoo_error() or ""
             if payload:
                 frame = _parse_chart_payload(payload)
                 if not frame.empty:
@@ -125,8 +200,13 @@ def download_daily_bars(
                     consecutive_fail = 0
                 else:
                     consecutive_fail += 1
+                    other_fail += 1
             else:
                 consecutive_fail += 1
+                if "429" in after_err:
+                    status_429 += 1
+                else:
+                    other_fail += 1
 
             if consecutive_fail >= max_consecutive_failures and not frames:
                 break
@@ -135,7 +215,18 @@ def download_daily_bars(
                 time.sleep(pause_s)
 
     if not frames:
+        parts = [f"tried {attempted}/{len(yahoo_tickers)}", "0 frames"]
+        if status_429:
+            parts.append(f"{status_429} HTTP 429")
+        if other_fail:
+            parts.append(f"{other_fail} other failures")
+        detail = get_last_yahoo_error()
+        summary = "yahoo returned empty dataframe (" + ", ".join(parts) + ")"
+        if detail and not detail.startswith("yahoo returned empty"):
+            summary = f"{summary}; last: {detail}"
+        _set_last_yahoo_error(summary)
         return pd.DataFrame()
+    _set_last_yahoo_error(None)
     return pd.concat(frames, axis=1)
 
 
@@ -146,6 +237,89 @@ def download_symbol_history(
     interval: str = "1d",
 ) -> pd.DataFrame:
     return fetch_chart(yahoo_symbol, period=period, interval=interval)
+
+
+def _bar_local_date(ts, zone: ZoneInfo) -> date:
+    if hasattr(ts, "to_pydatetime"):
+        dt = ts.to_pydatetime()
+    else:
+        dt = ts
+    if getattr(dt, "tzinfo", None) is None:
+        dt = dt.replace(tzinfo=zone)
+    else:
+        dt = dt.astimezone(zone)
+    return dt.date()
+
+
+def session_open_from_intraday(
+    frame: pd.DataFrame,
+    *,
+    session_date: date,
+    tz: ZoneInfo,
+) -> Optional[tuple[float, float]]:
+    """First session 5m open + last session close, or None if no bars that day."""
+    if frame is None or frame.empty or "Open" not in frame.columns:
+        return None
+    opens: list[float] = []
+    closes: list[float] = []
+    for ts, row in frame.iterrows():
+        if _bar_local_date(ts, tz) != session_date:
+            continue
+        try:
+            o = float(row["Open"])
+            c = float(row["Close"]) if "Close" in row and row["Close"] == row["Close"] else o
+        except (TypeError, ValueError):
+            continue
+        if o != o:  # NaN
+            continue
+        opens.append(o)
+        closes.append(c if c == c else o)
+    if not opens:
+        return None
+    return opens[0], closes[-1]
+
+
+def download_session_opens(
+    yahoo_tickers: list[str],
+    *,
+    session_date: date,
+    tz: ZoneInfo,
+    period: str = "1d",
+    pause_s: float = 0.12,
+    max_consecutive_failures: int = 20,
+) -> dict[str, tuple[float, float]]:
+    """Yahoo 5m → {symbol: (session_open, last_session_close)} for session_date.
+
+    Used when the daily chart still lacks today's bar (common for ASX early session).
+    """
+    _set_last_yahoo_error(None)
+    out: dict[str, tuple[float, float]] = {}
+    if not yahoo_tickers:
+        return out
+
+    consecutive_fail = 0
+    with httpx.Client(timeout=20.0, headers=_HEADERS, follow_redirects=True) as client:
+        for i, sym in enumerate(yahoo_tickers):
+            payload = _get_chart_json(
+                client, sym, period=period, interval="5m", retries=2
+            )
+            if payload:
+                frame = _parse_chart_payload(payload)
+                pair = session_open_from_intraday(frame, session_date=session_date, tz=tz)
+                if pair is not None:
+                    out[sym] = pair
+                    consecutive_fail = 0
+                else:
+                    consecutive_fail += 1
+            else:
+                consecutive_fail += 1
+
+            if consecutive_fail >= max_consecutive_failures and not out:
+                break
+            if pause_s and i + 1 < len(yahoo_tickers):
+                time.sleep(pause_s)
+
+    return out
 
 
 def extract_ticker_frame(data: pd.DataFrame, yahoo_symbol: str) -> Optional[pd.DataFrame]:

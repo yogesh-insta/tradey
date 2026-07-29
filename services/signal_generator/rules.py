@@ -14,6 +14,8 @@ DEFAULT_RULES_PATH = ROOT / "rules.json"
 class UniverseFilters(BaseModel):
     index: str = "S&P 500"
     min_price_usd: float = 3.0
+    # ASX rules may set min_price_aud; prefer when present.
+    min_price_aud: Optional[float] = None
 
 
 class DailyFilters(BaseModel):
@@ -65,10 +67,26 @@ class StrategyRules(BaseModel):
 
 
 def load_rules(path: Optional[Path] = None) -> StrategyRules:
-    rules_path = Path(path) if path else DEFAULT_RULES_PATH
+    if path is not None:
+        rules_path = Path(path)
+    else:
+        try:
+            from services.market_profile import get_market_profile
+
+            rules_path = get_market_profile().rules_path
+        except Exception:  # noqa: BLE001
+            rules_path = DEFAULT_RULES_PATH
     if not rules_path.is_file():
         raise FileNotFoundError(f"rules.json not found: {rules_path}")
     return StrategyRules.model_validate_json(rules_path.read_text(encoding="utf-8"))
+
+
+def min_price_from_rules(rules: StrategyRules) -> float:
+    """Screen floor: prefer min_price_aud when set (ASX), else min_price_usd."""
+    aud = rules.universe_filters.min_price_aud
+    if aud is not None and aud > 0:
+        return float(aud)
+    return float(rules.universe_filters.min_price_usd)
 
 
 def rules_version_stamp(rules: Optional[StrategyRules] = None) -> str:

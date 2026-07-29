@@ -79,3 +79,24 @@ def sizing_portfolio_usd(
     if broker_net_liquidation_usd is None or broker_net_liquidation_usd <= 0:
         return cap
     return min(float(broker_net_liquidation_usd), cap)
+
+
+def sizing_portfolio(
+    *,
+    broker_net_liquidation: Optional[float] = None,
+    config: Optional[CapitalConfig] = None,
+    currency: str = "USD",
+) -> float:
+    """Native sizing units for Risk: USD path (with FX) or AUD ceiling (no FX).
+
+    ASX prices are AUD — pass portfolio_value_aud as the sizing notional.
+    Broker NL is typically account base (often USD); for ASX v1 we size against
+    the AUD proof ceiling so FX noise does not inflate ASX risk.
+    """
+    cfg = config or CapitalConfig.from_env()
+    if (currency or "USD").upper() == "AUD":
+        return float(cfg.portfolio_value_aud)
+    return sizing_portfolio_usd(
+        broker_net_liquidation_usd=broker_net_liquidation,
+        config=cfg,
+    )
