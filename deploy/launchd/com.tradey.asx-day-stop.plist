@@ -6,9 +6,8 @@
   After Sydney force-close (~15:51–16:00). Hands off idle window before US
   overnight start at 21:30.
 
-  Install:
-    cp deploy/launchd/com.tradey.asx-day-stop.plist ~/Library/LaunchAgents/
-    launchctl load ~/Library/LaunchAgents/com.tradey.asx-day-stop.plist
+  Install: ./deploy/launchd/install.sh
+    That rewrites __REPO_ROOT__ to this clone and loads ~/Library/LaunchAgents.
 
   Does not flatten IBKR positions — use scripts/flatten_all.py if needed.
 -->

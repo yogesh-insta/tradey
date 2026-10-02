@@ -12,7 +12,7 @@ Last checked: 2026-07-14 (plan 09 dual-mode US+ASX implemented; ASX dry-run read
 
 | Plan / area | Status | Notes |
 |---|---|---|
-| IBKR manual setup / local Gateway | **Done** | Paper connect + fill worked (`DUxxxxxx`) |
+| IBKR manual setup / local Gateway | **Done** | Paper connect + fill worked (account id stays in IBKR, not in git) |
 | Telegram notify | **Done** | `@Tradey1122bot` → `@alphayogi` |
 | Dashboard | **Done** | http://127.0.0.1:8080 |
 | Ledger (ATO v0) | **Partial** | SQLite events; `scripts/pnl_report.py` for day summary; full ATO export later |

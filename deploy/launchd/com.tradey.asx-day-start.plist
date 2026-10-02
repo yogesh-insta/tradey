@@ -7,9 +7,8 @@
   Pair with com.tradey.asx-day-stop.plist (~16:30). Sequential with US overnight
   agents (21:30 start / 09:00 stop) — do not overlap runners.
 
-  Install (once):
-    cp deploy/launchd/com.tradey.asx-day-start.plist ~/Library/LaunchAgents/
-    launchctl load ~/Library/LaunchAgents/com.tradey.asx-day-start.plist
+  Install (once): ./deploy/launchd/install.sh
+    That rewrites __REPO_ROOT__ to this clone and loads ~/Library/LaunchAgents.
 
   Unload:
     launchctl unload ~/Library/LaunchAgents/com.tradey.asx-day-start.plist

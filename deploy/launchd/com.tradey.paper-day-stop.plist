@@ -5,9 +5,8 @@
 
   After US session / force-close. Hands off to ASX daytime start at 09:30.
 
-  Install:
-    cp deploy/launchd/com.tradey.paper-day-stop.plist ~/Library/LaunchAgents/
-    launchctl load ~/Library/LaunchAgents/com.tradey.paper-day-stop.plist
+  Install: ./deploy/launchd/install.sh
+    That rewrites __REPO_ROOT__ to this clone and loads ~/Library/LaunchAgents.
 
   Does not flatten IBKR positions — use scripts/flatten_all.py if needed.
 -->
