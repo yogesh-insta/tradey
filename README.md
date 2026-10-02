@@ -1,5 +1,10 @@
 # tradey
 
+**Stack:** Python, IBKR, Telegram
+
+**Skills:** Algorithmic trading, local-first services, messaging integrations
+
+
 Local-first algorithmic trading monorepo in Python (IBKR paper → cloud later).
 
 ## Quick start
