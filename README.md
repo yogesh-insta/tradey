@@ -5,7 +5,6 @@ Local-first algorithmic trading monorepo (IBKR paper → cloud later).
 ## Quick start
 
 ```bash
-cd __REPO_ROOT__
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt

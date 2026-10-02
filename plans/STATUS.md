@@ -2,7 +2,7 @@
 
 Last checked: 2026-07-14 (preflight for overnight dry-run soak)
 
-**Preflight (2026-07-14):** pytest 62 passed; `session_runner --once --dry-run` OK; start/stop smoke OK (dashboard `:8080` + bot status + heartbeat). Default remains dry-run. Launchd plists in-repo point at `__REPO_ROOT__` but are **not** loaded into `~/Library/LaunchAgents` yet. Gateway TCP was up; leftover `run_local_process` held `IBKR_CLIENT_ID=7` (exec path uses `18` — verified OK). Prefer stopping the old heartbeat before `--paper`.
+**Preflight (2026-07-14):** pytest 62 passed; `session_runner --once --dry-run` OK; start/stop smoke OK (dashboard `:8080` + bot status + heartbeat). Default remains dry-run. Launchd templates use `__REPO_ROOT__`; `deploy/launchd/install.sh` writes the real path into `~/Library/LaunchAgents`. They were **not** loaded yet. Gateway TCP was up; leftover `run_local_process` held `IBKR_CLIENT_ID=7` (exec path uses `18` — verified OK). Prefer stopping the old heartbeat before `--paper`.
 
 **Signal approach (locked v1):** Humbled Trader blog pattern — `rules.json` + morning gap prefilter + D1–D3/I1–I3 → `NormalizedSignal`. TradingView optional later. See [`06_SIGNAL_BLOG_SETUP.md`](06_SIGNAL_BLOG_SETUP.md).
 
@@ -14,7 +14,7 @@ Last checked: 2026-07-14 (preflight for overnight dry-run soak)
 
 | Plan / area | Status | Notes |
 |---|---|---|
-| IBKR manual setup / local Gateway | **Done** | Paper connect + fill worked (`DUxxxxxx`) |
+| IBKR manual setup / local Gateway | **Done** | Paper connect + fill worked (account id stays in IBKR, not in git) |
 | Telegram notify | **Done** | `@Tradey1122bot` → `@alphayogi` |
 | Dashboard | **Done** | http://127.0.0.1:8080 |
 | Ledger (ATO v0) | **Partial** | SQLite events; `scripts/pnl_report.py` for day summary; full ATO export later |

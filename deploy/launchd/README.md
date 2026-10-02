@@ -11,12 +11,10 @@ IB Gateway login is still manual (human) before enabling paper orders.
 
 ## One-time install
 
+Templates use `__REPO_ROOT__`. The install script rewrites that to this clone and loads the agents. The installed copies live in `~/Library/LaunchAgents`, not in git.
+
 ```bash
-# Edit Absolute paths in the plists if your clone is not __REPO_ROOT__
-cp deploy/launchd/com.tradey.paper-day-start.plist ~/Library/LaunchAgents/
-cp deploy/launchd/com.tradey.paper-day-stop.plist ~/Library/LaunchAgents/
-launchctl load ~/Library/LaunchAgents/com.tradey.paper-day-start.plist
-launchctl load ~/Library/LaunchAgents/com.tradey.paper-day-stop.plist
+./deploy/launchd/install.sh
 ```
 
 ## Unload

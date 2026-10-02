@@ -6,10 +6,8 @@
   Weekday evenings so you can verify Bot status on the dashboard before bed.
   Runner idles in too_early / prefilter until US RTH; default is dry-run.
 
-  Install (once):
-    cp deploy/launchd/com.tradey.paper-day-start.plist ~/Library/LaunchAgents/
-    # Edit ProgramArguments path if repo is not __REPO_ROOT__
-    launchctl load ~/Library/LaunchAgents/com.tradey.paper-day-start.plist
+  Install (once): ./deploy/launchd/install.sh
+    That rewrites __REPO_ROOT__ to this clone and loads ~/Library/LaunchAgents.
 
   Unload:
     launchctl unload ~/Library/LaunchAgents/com.tradey.paper-day-start.plist
