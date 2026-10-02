@@ -1,6 +1,6 @@
 # tradey
 
-Local-first algorithmic trading monorepo (IBKR paper → cloud later).
+Local-first algorithmic trading monorepo in Python (IBKR paper → cloud later).
 
 ## Quick start
 
